@@ -1,0 +1,390 @@
+%\VignetteIndexEntry{Introduction to VariantTools}
+%\VignetteKeywords{variants, sequencing, SNPs, somatic mutations, RNA editing}
+%\VignettePackage{VariantTools}
+\documentclass[10pt]{article}
+
+\usepackage{times}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage[colorlinks=true, linkcolor=Blue, urlcolor=Blue,
+  citecolor=Blue]{hyperref}
+
+\textwidth=6.5in
+\textheight=8.5in
+\oddsidemargin=-.1in
+\evensidemargin=-.1in
+\headheight=-.3in
+
+\newcommand{\Rfunction}[1]{{\texttt{#1}}}
+\newcommand{\Robject}[1]{{\texttt{#1}}}
+\newcommand{\Rpackage}[1]{{\textit{#1}}}
+\newcommand{\Rmethod}[1]{{\texttt{#1}}}
+\newcommand{\Rfunarg}[1]{{\texttt{#1}}}
+\newcommand{\Rclass}[1]{{\textit{#1}}}
+\newcommand{\Rcode}[1]{{\texttt{#1}}}
+\newcommand{\software}[1]{\textsf{#1}} 
+\newcommand{\R}{\software{R}}
+\newcommand{\Bioconductor}{\software{Bioconductor}}
+\newcommand{\VariantTools}{\Rpackage{VariantTools}}
+
+\title{An Introduction to \VariantTools}
+\author{Michael Lawrence, Jeremiah Degenhardt}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+<<<options, echo=FALSE>>=
+options(width=72)
+@ 
+
+\newpage 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+This vignette outlines the basic usages of the \VariantTools package
+and the general workflow for loading data, calling single sample
+variants and tumor-specific somatic mutations or other sample-specific
+variant types (eg RNA editing). Most of the functions operate on
+alignments (BAM files) or datasets of called variants. The user is
+expected to have already aligned the reads with a separate tool, e.g.,
+\software{GSNAP} via \Rpackage{gmapR}.
+
+\section{Calling single-sample variants}
+
+\subsection{Basic usage}
+\label{sec:quick-start}
+
+For our example, we take paired-end RNA-seq alignments from two lung
+cancer cell lines from the same individual. H1993 is derived from a
+metastatis and H2073 is derived from the primary tumor. 
+
+Below, we call variants from a region around the p53 gene:
+<<callVariants>>=
+library(VariantTools)
+p53 <- gmapR:::exonsOnTP53Genome("TP53")
+bams <- LungCancerLines::LungCancerBamFiles()
+bam <- bams$H1993
+tally.param <- TallyVariantsParam(gmapR::TP53Genome(), 
+                                  high_base_quality = 23L,
+                                  which = range(p53) + 5e4,
+                                  indels = TRUE, read_length = 75L)
+called.variants <- callVariants(bam, tally.param)
+@ %$
+%
+In the above, we load the genome corresponding to the human p53 gene
+region and the H1993 BAM file (stripped down to the same region). We
+pass the BAM, genome, read length and quality cutoff to the
+\Rfunction{callVariants} workhorse. The read length is not strictly
+required, but it is necessary for one of the QA filters. The value
+given for the high base quality cutoff is appropriate for Sanger and
+Illumina 1.8 or above. By default, the high quality counts are used by
+the likelihood ratio test during calling.
+
+The returned \Robject{called\_variants} is a variant \Rclass{GRanges}, in
+the same form as that returned by \Rfunction{bam\_tally} in the
+\Rpackage{gmapR} package. Unsurprisingly, \Rfunction{callVariants}
+uses \Rfunction{bam\_tally} internally to generate the per-nucleotide
+counts (pileup) from the BAM file. The result is then filtered to
+generate the variant calls. The \Rclass{VCF} class holds similar
+information; however, we favor the simple tally \Rclass{GRanges},
+because it has a separate record for each ALT, at each position. 
+\Rclass{VCF}, the class and the file format, has a single record for a
+position, collapsing over multiple ALT alleles, and this is much less
+convenient for our purposes. 
+
+We can post-filter the variants for those that are clustered too
+closely on the genome:
+<<callVariants-postFilter>>=
+pf.variants <- postFilterVariants(called.variants)
+@
+
+We can subset the variants by those in an actual p53 exon (not an
+intron):
+<<callVariants-exonic>>=
+subsetByOverlaps(called.variants, p53, ignore.strand = TRUE)
+@ 
+
+The next section goes into further detail on the process, including
+the specific filtering rules applied, and how one might, for example,
+tweak the parameters to avoid calling low-coverage variants,
+like the one above.
+
+\subsection{Step by step}
+\label{sec:step-by-step}
+
+The \Rfunction{callVariants} method for BAM files, introduced above,
+is a convenience wrapper that delegates to several low-level functions
+to perform each step of the variant calling process: generating the
+tallies, basic QA filtering and the actual variant calling. Calling
+these functions directly affords the user more control over the
+process and provides access to intermediate results, which is useful
+e.g. for diagnostics and for caching results. The workflow consists of
+three function calls that rely on argument defaults to achieve the
+same result as our call to \Rfunction{callVariants} above. Please see
+their man pages for the arguments available for customization.
+
+The first step is to tally the variants from the BAM file. By default,
+this will return observed differences from the reference, excluding N
+calls and only counting reads above 13 in mapping quality (MAPQ)
+score. There are three read position bins: the first 10 bases, the final 10
+bases, and the stretch between them (these will be used in the QA
+step).
+<<tallyVariants>>=
+raw.variants <- tallyVariants(bam, tally.param)
+@ 
+
+Unless one is running a variant caller in a routine fashion over
+familiar types of data, we highly recommend performing detailed QC of
+the tally results. \Rpackage{VariantTools} provides several QA filters
+that aim to expose artifacts, especially those generated during
+alignment. These filters are \emph{not} designed for filtering during
+actual calling; rather, they are meant for annotating the variants
+during exploratory analysis. The filters include a check on the median
+distance of alt calls from their nearest end of the read (default
+passing cutoff >= 10), as well as a Fisher Exact Test on the
+per-strand counts vs. reference for strand bias (p-value cutoff:
+0.001). The intent is to ensure that the data are not due to
+strand-specific nor read position-specific artifacts.
+
+The \Rfunction{qaVariants} function will \emph{soft} filter the
+variants via \Rfunction{softFilter}. No variants are removed; the
+filter results are added to the \Rfunction{softFilterMatrix} component
+of the object.
+<<qaVariants>>=
+qa.variants <- qaVariants(raw.variants)
+summary(softFilterMatrix(qa.variants))
+@ 
+
+The final step is to actually call the variants. The
+\Rfunction{callVariants} function uses a binomial likelihood ratio
+test for this purpose. The ratio is $P(D|p=p_{lower}) /
+P(D|p=p_{error})$, where $p_{lower} = 0.2$ is the assumed lowest
+variant frequency and $p_{error} = 0.001$ is the assumed error rate in
+the sequencing (default: 0.001).
+<<callVariants>>=
+called.variants <- callVariants(qa.variants)
+@ 
+
+The \Rfunction{callVariants} function applies an additional set of
+filters after the actual variant calling. These are known as ``post''
+filters and consider the putative variant calls as a set, independent
+of the calling algorithm.  Currently, there is only one post filter by
+default, and it discards variants that are clumped together along the
+chromosome, as these often result from mapping difficulties.
+
+\subsection{Diagnosing the filters}
+\label{sec:filter-diag}
+
+The calls to \Rfunction{qaVariants} and \Rfunction{callVariants} are
+essentially filtering the tallies, so it is important to know,
+especially when faced with a new dataset, the effect of each filter
+and the effect of the individual parameters on each filter. 
+
+The filters are implemented as modules and are stored in a
+\Rclass{FilterRules} object from the \Rpackage{IRanges} package. We
+can create those filters directly and rely on some
+\Rclass{FilterRules} utilities to diagnose the filtering process.
+
+Here we construct the \Rclass{FilterRules} that implements the
+\Rfunction{qaVariants} function. Again, we rely on the argument
+defaults to generate the same answer.
+<<VariantQAFilters>>=
+qa.filters <- VariantQAFilters()
+@ 
+%
+We can now ask for a summary of the filtering process, which gives the
+number of variants that pass each filter, separately and then combined:
+<<VariantQAFilters-summary>>=
+summary(qa.filters, raw.variants)
+@ 
+%
+Now we retrieve only the variants that pass the filters:
+<<VariantQAFilters-subset>>=
+qa.variants <- subsetByFilter(raw.variants, qa.filters)
+@ 
+
+We could do the same, except modify a filter parameter, such as the
+p-value cutoff for the Fisher Exact Test for strand bias:
+<<VariantQAFilters-fisherStrandP>>=
+qa.filters.custom <- VariantQAFilters(fisher.strand.p.value = 1e-4)
+summary(qa.filters.custom, raw.variants)
+@ 
+%
+To get a glance at the additional variants we are discarding
+compared to the previous cutoff, we can subset the filter sets down to the
+Fisher strand filter, evaluate the old and new filter, and compare the
+results: 
+<<VariantQAFilters-compare>>=
+fs.original <- eval(qa.filters["fisherStrand"], raw.variants) 
+fs.custom <- eval(qa.filters.custom["fisherStrand"], raw.variants)
+raw.variants[fs.original != fs.custom]
+@ 
+
+Below, we demonstrate how one might add a mask to e.g. filter out
+variants in low complexity regions, where mapping errors tend to dominate:
+<<VariantQAFilters-mask>>=
+tally.param@mask <- GRanges("TP53", IRanges(1010000, width=10000))
+raw.variants.masked <- tallyVariants(bam, tally.param)
+@
+
+We can also diagnose the filters for calling variants after basic QA
+checks.
+<<VariantCallingFilters>>=
+calling.filters <- VariantCallingFilters()
+summary(calling.filters, qa.variants)
+@ 
+
+Check how the post filter would perform prior to variant calling:
+<<post-filter>>=
+post.filters <- VariantPostFilters()
+summary(post.filters, qa.variants)
+@ 
+%
+What about if we preserved the ones we have already called?
+<<post-filter-whitelist>>=
+post.filters <- VariantPostFilters(whitelist = called.variants)
+summary(post.filters, qa.variants)
+@ 
+
+\subsection{Extending and customizing the workflow}
+\label{sec:extending}
+
+Since the built-in filters are implemented using \Rclass{FilterRules},
+it is easy to mix and match different filters, including those
+implemented externally to the \Rpackage{VariantTools} package. This is
+the primary means of extending and customizing the variant calling
+workflow.
+
+\section{Comparing variant sets across samples}
+
+So far, we have called variants for the metastatic H1993 sample. We
+leave the processing of the primary tumor H2073 sample as an exercise
+to the reader and instead turn our attention to detecting the variants
+that are specific to the metastatic sample, as compared to the primary
+tumor.
+
+\subsection{Calling sample-specific variants}
+
+The function \Rfunction{callSampleSpecificVariants} takes the case
+(e.g., tumor) sample and control (e.g., matched normal) sample as
+input. In our case, we are comparing the metastatic line (H1993) to
+the primary tumor line (H2073) from the same patient, a smoker. To
+avoid inconsistencies, it is recommended to pass BAM files as input,
+for which tallies are automatically generated, subjected to QA, and
+called as variants vs. reference, prior to determining the
+sample-specific variants. 
+
+Here, we find the somatic mutations from a matched tumor/normal
+pair. Since we are starting from BAM files, we have to provide
+\Robject{tally.param} for the tally step. 
+<<callSomaticMutations>>=
+tally.param@bamTallyParam@indels <- FALSE
+somatic <- callSampleSpecificVariants(bams$H1993, bams$H2073, tally.param)
+@ 
+%$
+This can be time-consuming for the entire genome, since the tallies
+need to be computed. To avoid repeated computation of the tallies, the
+user can pass the raw tally \Rclass{GRanges} objects instead of the
+BAM files. This is less safe, because anything could have happened to
+those \Rclass{GRanges} objects.
+
+The QA and initial calling are optionally controlled by passing
+\Rclass{FilterRules} objects, typically those returned by
+\Rfunction{VariantQAFilters} and \Rfunction{VariantCallingFilters},
+respectively. For controlling the final step, determining the
+sample-specific variants, one may pass filter parameters directly to
+\Rfunction{callSampleSpecificVariants}.  Here is an example of
+customizing some parameters.
+<<callSomaticMutations-readCount>>=
+calling.filters <- VariantCallingFilters(read.count = 3L)
+somatic <- callSampleSpecificVariants(bams$H1993, bams$H2073, tally.param,
+                                      calling.filters = calling.filters,
+                                      power = 0.9, p.value = 0.001)
+@ 
+
+\section{Exporting the calls as VCF}
+
+VCF is a common file format for communicating variants. To export our
+variants to a VCF file, we first need to coerce the \Rclass{GRanges}
+to a \Rclass{VCF} object. Then, we use \Rfunction{writeVcf} from the
+\Rpackage{VariantAnnotation} package to write the file (indexing is
+highly recommended for large files). Note that the sample names need
+to be non-missing to generate the VCF. Also, for simplicity and
+scalability, we typically do not want to output all of our metadata
+columns, so we remove all of them here.
+<<variantGR2VCF>>=
+sampleNames(called.variants) <- "H1993"
+mcols(called.variants) <- NULL
+vcf <- asVCF(called.variants)
+@ 
+<<writeVcf, eval=FALSE>>=
+writeVcf(vcf, "H1993.vcf", index = TRUE)
+@ 
+
+\section{Finding Wildtype and No-call Regions}
+
+So far, our analysis has yielded a set of positions that are likely to
+be variants. We have not made any claims about the status of the
+positions outside of that set. For this, we need to decide, for each
+position, whether there was sufficient coverage to detect a variant,
+if one existed. The following call carries out a power test to decide
+whether a region is variant, wildtype or is unable to be called due to
+lack of coverage. The variants must have been called using the filters
+returned by \Rfunction{VariantCallingFilters}. The algorithm depends
+on the filter parameter settings, so it is possible and indeed
+required for the user to pass filter object used for calling the
+variants. This requirement is an attempt to ensure consistency and
+will be made more convenient in the future. To request the calls for a
+particular set of positions, one can pass a \Rclass{GenomicRanges}
+(where all the ranges are of width 1) as the \Rfunarg{pos}
+argument. When \Rfunarg{pos} is specfied, each element of the result
+corresponds to an element in \Rfunarg{pos}.
+<<callWildtype>>=
+called.variants <- called.variants[!isIndel(called.variants)]
+pos <- c(called.variants, shift(called.variants, 3))
+wildtype <- callWildtype(bam, called.variants, VariantCallingFilters(), 
+                         pos = pos, power = 0.85)
+@
+%
+The returned object is a logical \Rclass{RleList} object, with
+\Rcode{TRUE} for wildtype, \Rcode{FALSE} for variant and \Rcode{NA}
+for no-call. Thus, we could calculate the fraction called as follows:
+<<percentageCalled>>=
+mean(!is.na(wildtype))
+@ 
+
+Sometimes it is desirable for the wildtype calls to be returned as
+simple vector, with a logical value for each position (range of width
+one) in \Rfunction{bamWhich}.  Such a vector is returned when
+\Rcode{global = FALSE} is passed to \Rfunction{callWildtype}. This is
+the same as extracting the positions from the ordinary \Rclass{Rle}
+return value, but it is implemented more efficiently, at least for a
+relatively small number of positions.
+
+% \section{Checking variant concordance}
+
+% <<variantConcordance>>=
+% concord <- checkVariantConcordance(tumor.variants, normal.variants)
+% concord
+% @ 
+
+% \section{Making some plots}
+
+% It is important to diagnose the behavior of these algorithms, and we
+% provide some exploratory plots to facilitate this. 
+
+% The first plot shows us the mutation transition/transversion rate matrix
+% <<plotting>>=
+% #plotTitv(TS, main = "tumor specific mutations")  
+% @ 
+
+% and finally we want to plot our variants on the genome 
+% <<plotting>>= 
+% #plotTumor(TS, tumor$filtered.granges)
+% @ 
+
+\end{document}
