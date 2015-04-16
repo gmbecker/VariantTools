@@ -1,0 +1,46 @@
+import(methods)
+import(BiocGenerics)
+import(S4Vectors)
+import(IRanges)
+import(GenomicRanges)
+import(VariantAnnotation)
+import(GenomeInfoDb)
+importFrom(parallel, mclapply, mcmapply)
+importFrom(Biostrings, DNAStringSet, detail, DNA_BASES)
+importFrom(Rsamtools, BamFile, ScanBamParam, bamWhich, ApplyPileupsParam,
+           PileupFiles, plpWhat, "plpWhat<-", applyPileups)
+importFrom(GenomicFeatures, cdsBy, exonsBy, transcriptLocs2refLocs)
+importFrom(gmapR, bam_tally, BamTallyParam, GmapGenome, variantSummary)
+importClassesFrom(Matrix, dgTMatrix)
+importFrom(rtracklayer, import)
+importClassesFrom(rtracklayer, BigWigFile)
+importFrom(tools, file_ext)
+importFrom(BiocParallel, bpvec, registered, bplapply, bpmapply, bpworkers)
+importFrom(BSgenome, getSeq)
+importFrom(Biobase, sampleNames, "sampleNames<-")
+
+export(callVariants, qaVariants, tallyVariants, postFilterVariants)
+export(MinTotalDepthFilter)
+
+export(calculateConcordanceMatrix,
+       callVariantConcordance, calculateVariantConcordance)
+export(VariantQAFilters, VariantCallingFilters, VariantTallyParam,
+       VariantPostFilters, TallyVariantsParam)
+export(variantGR2Vcf)
+
+export(callSampleSpecificVariants, SampleSpecificVariantFilters,
+       annotateWithControlDepth)
+
+export(SetdiffVariantsFilter, DepthFETFilter, MaxControlFreqFilter)
+
+export(callWildtype, minCallableCoverage)
+
+## some utilities
+export(matchVariants, "%variant_in%", extractCoverageForPositions)
+export(pileupVariants)
+
+## compatibility
+export(makeVRangesFromVariantGRanges)
+
+export(CallGenotypesParam)
+exportMethods(callGenotypes)

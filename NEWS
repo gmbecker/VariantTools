@@ -1,0 +1,113 @@
+CHANGES IN VERSION 1.8.0
+-----------------------
+
+NEW FEATURES
+
+    o Add callGenotypes function for annotating a set of tallies with
+      diploid genotype quality, likelihoods, etc in a way that is
+      conformant with the gVCF spec. The methods are somewhat similar
+      to those used by the GATK UnifiedGenotyper.
+    
+CHANGES IN VERSION 1.6.0
+-----------------------
+
+NEW FEATURES
+
+    o Add pileupVariants function as an alternative to tallyVariants
+      for computing nucleotide pileups using Rsamtools, instead of
+      gmapR. In the future, this should allow VariantTools to become
+      independent of gmapR, but the full variant statistics will only
+      be available via tallyVariants.
+    
+USER-VISIBLE CHANGES
+
+    o See the NEWS for gmapR to learn about changes to tallyVariants output.
+
+CHANGES IN VERSION 1.4.0
+-----------------------
+
+NEW FEATURES
+
+    o tallyVariants will now keep ref rows if variant_strand=0; this
+      is useful for getting information when no alts are present
+      (e.g., for making wildtype calls). Better have a big cluster to
+      do this over the whole genome.
+
+    o add a keep_extra_stats param to TallyVariantsParam; setting this to
+      FALSE will speed things up when the extra stats are not needed.
+
+    o idVerify now supports VCF input like that output by GATK.
+
+    o callableFraction() now supports GRangesList and TranscriptDb.
+    
+USER-VISIBLE CHANGES
+
+    o The API is now based on VRanges, a formal GRanges-derived class
+      for representing variants; use of so-called "tally" or "variant"
+      GRanges is deprecated.
+
+    o Disable proximity filter by default;
+      we recommend this now only for whole genome calling.
+
+    o QA filtering is no longer a formal part of the calling pipeline;
+      we recommend to apply QA filters "softly" via qaVariants() and use
+      the results for diagnostics only.
+
+    o Use BiocParallel (BPPARAM argument) for tallyVariants
+
+    o VariantTallyParam deprecated; use TallyVariantsParam
+    
+BUG FIXES
+
+    o idVerify now correctly computes cliques instead of connected components
+
+    o use the total count, rather than the ref count when calculating
+      the alt frequency
+
+CHANGES IN VERSION 1.2.0
+-----------------------
+
+NEW FEATURES
+
+    o Tally, call and export indels (using same algorithm as for SNVs).
+    
+    o Add post-filter that discards variants that are clumped
+      together on the chromosome (likely mapping errors).
+
+    o Add filter for masking regions like simple / low complexity repeats.
+
+    o Add a filter that performs a t-test on the alt vs. ref read positions.
+      
+    o Add callWidtype() function for determining whether a position is
+      variant, wildtype or uncallable, assuming the built-in variant
+      calling filters. This is based on a power calculation that
+      considers the coverage.
+
+    o Some functions for estimating concordance between samples have
+      been added; these were developed for sample ID verification and
+      should be considered experimental.
+    
+    o matchVariants() utility for matching variants by pos and alt.
+
+USER-VISIBLE CHANGES
+
+    o The VCF output is now always in expanded form (one alt per row).
+      The AD (allele depth) geno tag contains the REF and ALT counts,
+      while AP (allele present) indicates presence of the REF and/or
+      ALT allele. Besides the DP tag, all other tags were
+      removed. These changes bring VariantTools more in line with
+      GATK.
+
+    o Control alt and total counts are returned from callSampleSpecificVariants.
+                  
+BUG FIXES
+
+    o The power cutoff in the sample-specific algorithm was not
+      considering the minimum alt read count filter.
+
+CHANGES IN VERSION 1.0.0
+-----------------------
+
+Initial release
+
+(start date: 12 September, 2012)
